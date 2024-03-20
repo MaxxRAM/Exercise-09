@@ -1,0 +1,129 @@
+---
+title: "Exercise 9"
+author: "Maxximus Ramsaroop"
+date: "2024-03-18"
+output: html_document
+---
+Load necessary packages
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(infer)
+library(patchwork)
+library(manipulate)
+library(broom)
+```
+
+Step 1 Create Dataframe
+```{r}
+f<- "https://raw.githubusercontent.com/difiore/ada-2024-datasets/main/Street_et_al_2017.csv"
+d<- read_csv(f, col_names = T)
+```
+
+Step 2: Plot ECV
+```{r}
+#plot ECV as a function of social group size, longevity, weaning, and repro_lifespan
+p1 <- ggplot(data = d, aes(x = d$Group_size, y = d$ECV)) + geom_point(na.rm = T)
+p2 <- ggplot(data = d, aes(x = d$Longevity, y = d$ECV)) + geom_point(na.rm = T)
+p3 <- ggplot(data = d, aes(x = d$Weaning, y = d$ECV)) + geom_point(na.rm = T)
+p4 <- ggplot(data = d, aes(x = d$Repro_lifespan, y = d$ECV)) + geom_point(na.rm = T)
+p1 + p2 + p3+ p4
+```
+
+Step 3: Derive B1 and B0 for ECV ~ Group_size
+```{r}
+s<- d |> filter(!is.na(Group_size) & !is.na(ECV))
+b1<- cov(s$ECV, s$Group_size)/var(s$Group_size) # 2.46307
+b0 <- mean(s$ECV) - b1*mean(s$Group_size) #30.3565
+```
+
+Step 4: use lm() to confirm
+```{r}
+m_d<- lm(formula = ECV ~ Group_size, data = d)
+m_s<- lm(formula = ECV ~ Group_size, data = s)
+summary(m_s)
+names(m_s)
+```
+
+Step 5: repeat analysis for Catarrhines, Platyrrhines, and Strepsirhines
+```{r}
+d_cat<- d|> filter(Taxonomic_group== "Catarrhini")
+d_plat<- d|> filter(Taxonomic_group== "Platyrrhini")
+d_strep<- d|> filter(Taxonomic_group== "Strepsirhini")
+
+m_d_cat<- lm(formula = ECV ~ Group_size, data = d_cat)
+m_d_plat<- lm(formula = ECV ~ Group_size, data = d_plat)
+m_d_strep<- lm(formula = ECV ~ Group_size, data = d_strep)
+tidy(m_d_cat)
+tidy(m_d_plat)
+tidy(m_d_strep)
+# Yes regression coefficients differ among groups. This is determined by calling the lm() function. The intercept (b0) and slope (b1) differ for each group
+```
+
+Step 6: For your first regression of ECV on social group size calculate SE(B1), the 95% CI, and the p value associated with this coefficient by hand. Also extract this same information from the results of running the lm() function.
+```{r}
+m<- lm(s$ECV ~ s$Group_size, data = s)
+SSY<-sum((m$model$`s$ECV`-mean(m$model$`s$ECV`))^2) #721332.5
+SSR<-sum((m$fitted.values-mean(m$model$`s$ECV`))^2) #179324.4
+SSE<-sum((m$model$`s$ECV` -m$fitted.values)^2) #542008.1
+dfy<-nrow(s)-1 #150
+dfr<-1
+dfe<-nrow(s)-(dfr+1) #149
+MSY<- SSY/dfy #4808.883
+MSR<- SSR/dfr #179324.4
+MSE<- SSE/dfe #3637.639
+fratio<-MSR/MSE #49.29692
+
+# Calculate the P value
+p<-pf(q=fratio, df1=dfr, df2=dfe, lower.tail = FALSE) #7.259435e-11
+p
+# Calculate the SE(b1)
+SSX<-sum((m$model$`s$Group_size`-mean(m$model$`s$Group_size`))^2)
+SEb1<-sqrt(MSE/SSX)
+SEb1
+# Calculate the CI
+alpha <- 0.05
+msummary <- tidy(m)
+lower <- msummary$estimate - qt(1 - alpha/2, df = nrow(s) - 2) * msummary$std.error
+upper <- msummary$estimate + qt(1 - alpha/2, df = nrow(s) - 2) * msummary$std.error
+CI <- cbind(lower, upper) 
+rownames(CI) <- c("Intercept", "Group_size")
+CI
+#Intercept CI: 16.926896 43.786153
+#Group_size CI: 1.769874  3.156269
+summary(m)
+```
+
+Step 7:Use a permutation approach with 1000 permutations to generate a null sampling distribution for the slope coefficient. What is it that you need to permute? What is the p value associated with your original slope coefficient? You can use either the percentile method (i.e., using quantiles from the actual permutation-based null sampling distribution) or a theory-based method (i.e., using the standard deviation of the permutation-based null sampling distribution as the estimate of the standard error, along with a normal or t distribution), or both, to calculate this p value.
+```{r}
+
+alpha <- 0.05
+plower <- alpha/2
+pupper <- 1 - (alpha/2)
+df <- 149
+tval <- qt(pupper, df = 149)
+
+# I need to permute samples of the slope between ECV and group size
+permutation<- s|> specify(ECV ~ Group_size) |> hypothesise(null = "independence") |> generate(reps = 1000, type = "permute") |> calculate(stat = "slope")
+
+#create original slope
+originalslope<- lm(data = s, ECV ~ Group_size) |> tidy(conf.int = T, conf.level = 0.95) |> filter(term == "Group_size")
+
+pval <- permutation |> get_p_value(obs_stat = originalslope$estimate, direction="two_sided") # not sure how but i got a p value of 0?
+pval
+```
+
+
+Step 8: Use bootstrapping to generate a 95% CI for your estimate of the slope coefficient using both the percentile method and the theory-based method (i.e., using on the standard deviation of the bootstrapped sampling distribution as an estimate of the standard error). Do these CIs suggest that your slope coefficient is different from zero?
+```{r}
+boot<- s|> specify(ECV ~ Group_size) |> hypothesise(null = "independence") |> generate(reps = 1000, type = "bootstrap") |> calculate(stat = "slope")
+summary(boot)
+
+bootsummary <- boot |> summarize(estimate = mean(stat), std.error = sd(stat), lower = estimate - std.error * tval, upper = estimate + std.error * tval, blower = quantile(stat, plower), bupper = quantile(stat, pupper))
+
+
+CIpercentile <- get_ci(boot, level = 1 - alpha, type = "percentile")
+CIpercentile
+CItheory <- get_ci(boot, level = 1 - alpha, type = "se", point_estimate = pull(bootsummary, estimate))
+CItheory
+```
